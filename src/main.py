@@ -261,7 +261,7 @@ def _check_for_duplicates(testing_dir):
     }
     if not duplicate_biomes:
         print("No duplicates found")
-        return
+        return 0, []
     print(f"We've found {len(duplicate_biomes)} duplicates!\n\t{duplicate_biomes}\nClearing this up")
     for meta_hash, biomes in duplicate_biomes.items():
         to_delete = biomes[1:]
