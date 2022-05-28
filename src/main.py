@@ -3,6 +3,7 @@ import json
 import sys
 import time
 
+from collections import defaultdict
 from datetime import datetime
 
 from os import environ, makedirs, remove
@@ -20,7 +21,8 @@ from blend_modes import normal
 from PIL import Image
 
 GET_FILE_NAMES = lambda path: glob.glob(path)
-QRNG_URL = "http://www.randomnumberapi.com/api/v1.0/random?min=1&max=65535&count=3"
+QRNG_URL = "http://www.randomnumberapi.com/api/v1.0/random?min=1&max=65535&count=4"
+HOUSE_NUMBER_URL = "http://www.randomnumberapi.com/api/v1.0/random?min=1&max=500&count=1"
 PINATA_URL = "https://api.pinata.cloud/pinning/pinFileToIPFS"
 HEADERS = {
     "Authorization": f"Bearer {environ['JWT_TOKEN']}"
@@ -40,6 +42,7 @@ OBJECTS_DIR = join(BIOME_DIR, "Objects")
 BACKGROUND_DF = pandas.read_csv(join(BACKGROUD_DIR, "numbers.csv"))
 FOREGROUND_DF = pandas.read_csv(join(FOREGROUND_DIR, "numbers.csv"))
 OBJECTS_DF = pandas.read_csv(join(OBJECTS_DIR, "numbers.csv"))
+STREETS_DF = pandas.read_csv(join(REPO_DIR, "streets.csv"))
 
 
 ATTRIBUTE_TYPES = {
@@ -53,6 +56,10 @@ ATTRIBUTE_TYPES = {
     },
     "object": {
         "data": OBJECTS_DF,
+        "qrng": None
+    },
+    "street": {
+        "data": STREETS_DF,
         "qrng": None
     }
 }
@@ -75,6 +82,7 @@ CONFLICTS = {
     ]
 }
 
+addresses = defaultdict(list)
 all_biomes = {}
 
 
@@ -92,8 +100,6 @@ def main():
 
     main_end = time.time()
     print(f"{''.join(SEPARATOR)}\nTotal time for {limit} biomes was: {main_end - main_start}")
-    print("Uploading to IPFS now")
-    # _upload_to_ipfs(testing_dir)
 
 def _manage_test_dir():
     """Creates a directory in which all the biomes and metadata will be
@@ -119,17 +125,19 @@ def _get_random_number():
         background_qrng (int): Random number
         foreground_qrng (int): Random number
         object_qrng (int): Random number
+        street_qrng (int): Random number
     """
     response = json.loads(requests.get(QRNG_URL).text)
     print(f"... Response: {response}")
     background_qrng = response[0]
     foreground_qrng = response[1]
     object_qrng = response[2]
+    street_qrng = response[3]
 
-    return background_qrng, foreground_qrng, object_qrng
+    return background_qrng, foreground_qrng, object_qrng, street_qrng
 
 
-def _get_attributes(background_qrng, foreground_qrng, object_qrng):
+def _get_attributes(background_qrng, foreground_qrng, object_qrng, street_qrng):
     """Uses the qrng's provided to determine which attribute it's been
     assigned with, populates the attributes dictionary and returns that
     unless there is a conflict in the pre-determined ruleset.
@@ -138,6 +146,7 @@ def _get_attributes(background_qrng, foreground_qrng, object_qrng):
         background_qrng (int): Random number
         foreground_qrng (int): Random number
         object_qrng (int): Random number
+        street_qrng (int): Random number
         
     Returns:
         dict: Dictionary of attributes, default to None if a conflict
@@ -145,12 +154,14 @@ def _get_attributes(background_qrng, foreground_qrng, object_qrng):
     attributes = {
         "background": None,
         "foreground": None,
-        "object": None
+        "object": None,
+        "street": None
     }
 
     ATTRIBUTE_TYPES["background"]["qrng"] = background_qrng
     ATTRIBUTE_TYPES["foreground"]["qrng"] = foreground_qrng
     ATTRIBUTE_TYPES["object"]["qrng"] = object_qrng
+    ATTRIBUTE_TYPES["street"]["qrng"] = street_qrng
 
     for attribute_type, data in ATTRIBUTE_TYPES.items():
         for _, row in data["data"].iterrows():
@@ -162,6 +173,18 @@ def _get_attributes(background_qrng, foreground_qrng, object_qrng):
     if attributes["background"] in CONFLICTS and attributes["foreground"] in CONFLICTS[attributes["background"]]:
         print(f"\tBackground: {attributes['background']} clashes with Foreground: {attributes['foreground']}, we'll skip")
         return None
+
+    street_name = attributes["street"]
+    if len(addresses[street_name]) == 0:
+        response = json.loads(requests.get(HOUSE_NUMBER_URL).text)
+        first_number = response[0]
+        attributes["street"] = f"{first_number} {street_name}"
+        addresses[street_name].append(first_number)
+    else:
+        last_number = addresses[street_name][-1]
+        new_number = last_number + 1
+        addresses[street_name].append(new_number)
+        attributes["street"] = f"{new_number} {street_name}"
 
     return attributes
 
@@ -183,9 +206,6 @@ def _generate_image(attributes, testing_dir, number):
         attributes (dict): Dictionary containing the attributes of the biome
         testing_dir (os.path): Path of the output directory
         number (int): The number this file will be saved as
-
-    TODO:
-        IPFS
     """
     background_path = join(BACKGROUD_DIR, attributes["background"])
     foreground_path = join(FOREGROUND_DIR, attributes["foreground"])
@@ -219,7 +239,7 @@ def _save_json(attributes, testing_dir, number):
         number (int): The number this file will be saved as    
     """
     meta_data_structure = {
-        "name": "1 Foo bar lane",
+        "name": attributes["street"],
         "resources": [
             {
                 "uri": attributes["ipfs"],
@@ -337,11 +357,12 @@ def _generate(testing_dir, number_to_produce, patches=None):
         print("----- New Biome -----")
         attributes = {}
         while True:
-            background_qrng, foreground_qrng, object_qrng = _get_random_number()
+            background_qrng, foreground_qrng, object_qrng, street_qrng = _get_random_number()
             attributes = _get_attributes(
                 background_qrng,
                 foreground_qrng,
-                object_qrng
+                object_qrng,
+                street_qrng
             )
             if attributes:
                 print(f"\tGot the following attributes: {attributes}")
