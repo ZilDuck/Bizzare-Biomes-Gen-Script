@@ -1,13 +1,11 @@
 import glob
 import json
-from optparse import Values
 import sys
 import time
 
 from datetime import datetime
-from itertools import chain
 
-from os import makedirs, remove
+from os import environ, makedirs, remove
 from os.path import (
     dirname,
     exists,
@@ -23,6 +21,12 @@ from PIL import Image
 
 GET_FILE_NAMES = lambda path: glob.glob(path)
 QRNG_URL = "http://www.randomnumberapi.com/api/v1.0/random?min=1&max=65535&count=3"
+PINATA_URL = "https://api.pinata.cloud/pinning/pinFileToIPFS"
+HEADERS = {
+    "Authorization": f"Bearer {environ['JWT_TOKEN']}"
+}
+print(f"header: {HEADERS}")
+GIGABYTE = 1073741824
 SEPARATOR = ["-"] * 60
 
 REPO_DIR = dirname(dirname(__file__))
@@ -36,6 +40,7 @@ OBJECTS_DIR = join(BIOME_DIR, "Objects")
 BACKGROUND_DF = pandas.read_csv(join(BACKGROUD_DIR, "numbers.csv"))
 FOREGROUND_DF = pandas.read_csv(join(FOREGROUND_DIR, "numbers.csv"))
 OBJECTS_DF = pandas.read_csv(join(OBJECTS_DIR, "numbers.csv"))
+
 
 ATTRIBUTE_TYPES = {
     "background": {
@@ -200,8 +205,8 @@ def _generate_image(attributes, testing_dir, number):
     blended_image_raw.save(final_path, "PNG")
     all_biomes[number] = hash(str(attributes))
 
-    # hash = _push_to_ipfs(image)
-    # attributes["hash"] = hash
+    ipfs_hash = _upload_to_ipfs(testing_dir, number)
+    attributes["ipfs"] = f"ipfs://{ipfs_hash}"
     
 
 def _save_json(attributes, testing_dir, number):
@@ -213,9 +218,35 @@ def _save_json(attributes, testing_dir, number):
         testing_dir (os.path): Path of the output directory
         number (int): The number this file will be saved as    
     """
+    meta_data_structure = {
+        "name": "1 Foo bar lane",
+        "resources": [
+            {
+                "uri": attributes["ipfs"],
+                "mimetype": "image/png"
+            }
+        ],
+        "attributes": [
+            {
+                "display_type": "string",
+                "trait_type": "Background",
+                "value": attributes["background"].split(".")[0]
+            },
+            {
+                "display_type": "string",
+                "trait_type": "Foreground",
+                "value": attributes["foreground"].split(".")[0]
+            },
+            {
+                "display_type": "string",
+                "trait_type": "Object",
+                "value": attributes["object"].split(".")[0]
+            }
+        ]
+    }
     final_path = join(testing_dir, f"{number:0=4d}")
     with open(final_path, "w") as open_file:
-        json.dump(attributes, open_file)
+        json.dump(meta_data_structure, open_file)
 
 
 def _check_for_duplicates(testing_dir):
@@ -323,19 +354,19 @@ def _generate(testing_dir, number_to_produce, patches=None):
         print(f"\tTook {end - start}")
 
 
-def _upload_to_ipfs(testing_dir, limit):
+def _upload_to_ipfs(testing_dir, number):
     """Awaiting pinata to email me """
-    for i in range(1, limit+1):
-        biome = join(testing_dir, f"{i:0=4d}")
-        """
-        png = join(biome, ".png")
-        hash = requests.post(url, data={
-            ...
-        })
-        meta_data = {}
-        with open(biome, encoding="utf-8") as open_file:
-            meta_data = json.loads(open_file.read())
-        meta_data["hash"] = hash
-        with open(biome, "w") as open_file:
-            json.dump(meta_data, open_file)
-        """
+    ordinal = f"{number:0=4d}.png"
+    biome = join(testing_dir, ordinal)
+    binary_data = _get_binary_data_for_biome(biome)
+    response = requests.post(
+        PINATA_URL,
+        files={"file": (ordinal, binary_data)},
+        headers=HEADERS
+    )
+    return response.json()["IpfsHash"]
+
+
+def _get_binary_data_for_biome(biome):
+    with open(biome, "rb") as open_biome:
+        return open_biome.read()
